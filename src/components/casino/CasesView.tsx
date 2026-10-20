@@ -76,13 +76,6 @@ export function SectionTitle({ icon, title, hint }: { icon: React.ReactNode; tit
 
 const KIND_BADGE: Record<string, string> = { free: "FREE", tag: "ТЕГ", referral: "ДРУЗЬЯ" }
 
-function shortCoins(n: number) {
-  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`
-  if (n >= 10_000) return `${Math.round(n / 1000)}K`
-  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`
-  return String(Math.round(n))
-}
-
 /** Tier composition of a case: how many brainrots of each tier are inside. */
 function useCaseMeta(c: CaseDef) {
   return useMemo(() => {
@@ -102,7 +95,6 @@ function useCaseMeta(c: CaseDef) {
 
 function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
   const { caseReadyAt, freeCases } = useStore()
-  const { streamer } = useLive()
   const now = useNow()
   const readyAt = caseReadyAt(c)
   const locked = readyAt > now
@@ -458,7 +450,7 @@ export function InviteButton({ userId }: { userId: number }) {
 
 /** Clicks each time a card passes the center line while the strip decelerates. */
 function startTicks(vp: HTMLDivElement | null, ms: number) {
-  const strip = vp?.firstElementChild?.nextElementSibling?.nextElementSibling?.nextElementSibling as HTMLElement | null
+  const strip = vp?.lastElementChild as HTMLElement | null
   if (!strip) return
   const end = performance.now() + ms
   let last = -1
