@@ -88,6 +88,7 @@ const SEA = ["tralaledon", "los-primos", "eviledon", "orcaledon", "fishino-clown
 const CRYSTAL = ["nachorilla", "pretzo-robo", "grabatron", "la-fuse-machine", "bumbatron", "celestial-pegasus", "digi-narwhal", "arcadragon", "rubrikiko", "griffin", "phoenix", "orchidox", "hydra-dragon-cannelloni"]
 const CHRISTMAS = ["los-candies", "money-money-reindeer", "la-jolly-grande", "festive-67", "ginger-gerat", "la-ginger-sekolah", "reinito-sleighito", "cooki-and-milki", "chicleteira-noelteira", "chimnino", "yetimatic"]
 const SPRING = ["churrito-bunnito", "hopilikalika-hopilikalako", "la-easter-grande", "quackini-snackini", "boppin-bunny", "bunny-and-eggy", "hydra-bunny", "lovin-rose", "la-romantic-grande", "rosetti-tualetti", "love-love-bear", "rosey-and-teddy", "chicleteira-cupideira", "gold-gold-gold", "cloverat-clapat", "fortunu-and-cashuru"]
+const DRAGON = ["dragon-cannelloni", "hydra-dragon-cannelloni", "dragon-skeletonini", "arcadragon", "dragon-aquanini", "los-dragons", "phoenix", "lavamanta", "cerberus", "griffin", "chillin-chili", "los-chillis"]
 const SUMMER = ["capitano-gullini", "los-fruits", "sand-sand-sand", "coco-and-mango", "venuspino", "dragon-aquanini", "honey-honey-bear", "pop-pop-petalini", "queen-bee", "s-more-serat", "bumbatron", "orchidox", "la-summer-grande"]
 
 export const CASES: CaseDef[] = [
@@ -101,17 +102,6 @@ export const CASES: CaseDef[] = [
     accent: "#22c55e",
     cover: "/img/cases/free.webp",
     entries: split([5, 10, 15, 25, 40], 0.97, byTier("rare")),
-  },
-  {
-    id: "tag",
-    name: "Кейс за тег",
-    subtitle: `Добавь ${TAG} в ник · раз в 24 ч`,
-    kind: "tag",
-    price: 0,
-    cooldownHours: 24,
-    accent: "#38bdf8",
-    cover: "/img/cases/tag.webp",
-    entries: split([20, 40, 60, 100, 150], 0.85, byTier("rare", "epic")),
   },
   {
     id: "referral",
@@ -133,8 +123,69 @@ export const CASES: CaseDef[] = [
   paid("summer", "Лето и пчёлы", "Солнце, фрукты и мёд", "#facc15", art("summer"), byIds(SUMMER)),
   paid("crystal", "Кристальный", "Роботы, драконы и небесные", "#22d3ee", art("crystal"), byIds(CRYSTAL)),
   paid("admin", "Админ Абуз", "Только с Admin Abuse ивентов", "#dc2626", art("admin"), byCats(["Admin Abuse"])),
+  paid("dragon", "Драгон", "Лава, огонь и драконы", "#f97316", art("dragon"), byIds(DRAGON)),
   paid("og", "OG Легенды", "Эксклюзивы и OG", "#f472b6", art("og"), byTier("mythic", "og")),
 ]
+
+// ---- Owner overrides: custom chances and extra brainrots per case ----
+
+export interface CaseOverride {
+  /** Fixed chance in percent per drop key ("b:<id>" or "c:<amount>"). Other drops share the rest. */
+  chances?: Record<string, number>
+  /** Extra brainrot ids added to the case. */
+  add?: string[]
+  /** Brainrot ids removed from the case. */
+  remove?: string[]
+}
+
+export const dropKey = (d: Drop) => (d.kind === "coins" ? `c:${d.amount}` : `b:${d.id}`)
+
+/** Builds the final entries of a case from its base entries and an owner override. Weights sum to 1. */
+export function buildEntries(base: CaseEntry[], o: CaseOverride | undefined): CaseEntry[] {
+  if (!o) return base
+  const removed = new Set(o.remove ?? [])
+  let list = base.filter((e) => !(e.drop.kind === "brainrot" && removed.has(e.drop.id)))
+  const have = new Set(list.map((e) => dropKey(e.drop)))
+  const minW = list.length ? Math.min(...list.map((e) => e.weight)) : 1
+  for (const id of o.add ?? []) {
+    if (!BRAINROT_BY_ID[id] || have.has(`b:${id}`) || removed.has(id)) continue
+    have.add(`b:${id}`)
+    list = [...list, { drop: rot(BRAINROT_BY_ID[id]), weight: minW }]
+  }
+  if (!list.length) return base
+  const chances = o.chances ?? {}
+  const fixed = list.filter((e) => typeof chances[dropKey(e.drop)] === "number")
+  const fixedSum = Math.min(1, fixed.reduce((a, e) => a + Math.max(0, chances[dropKey(e.drop)]) / 100, 0))
+  const free = list.filter((e) => typeof chances[dropKey(e.drop)] !== "number")
+  const freeSum = free.reduce((a, e) => a + e.weight, 0)
+  const rest = 1 - fixedSum
+  const out = list.map((e) => {
+    const c = chances[dropKey(e.drop)]
+    if (typeof c === "number") return { drop: e.drop, weight: Math.max(0, c) / 100 }
+    return { drop: e.drop, weight: freeSum > 0 ? (e.weight / freeSum) * rest : 0 }
+  })
+  const total = out.reduce((a, e) => a + e.weight, 0)
+  return total > 0 ? out.map((e) => ({ ...e, weight: e.weight / total })) : base
+}
+
+const BASE_ENTRIES: Record<string, CaseEntry[]> = Object.fromEntries(CASES.map((c) => [c.id, c.entries]))
+
+export function baseEntries(caseId: string) {
+  return BASE_ENTRIES[caseId] ?? []
+}
+
+/** Applies owner overrides to every case in place. Returns true when something changed. */
+export function applyCaseOverrides(map: Record<string, CaseOverride>) {
+  let changed = false
+  for (const c of CASES) {
+    const next = buildEntries(BASE_ENTRIES[c.id], map[c.id])
+    if (JSON.stringify(next) !== JSON.stringify(c.entries)) {
+      c.entries = next
+      changed = true
+    }
+  }
+  return changed
+}
 
 export function rollCase(c: CaseDef): Drop {
   let r = Math.random()
