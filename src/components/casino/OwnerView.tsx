@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Crown, DatabaseBackup, Download, Gift, Megaphone, RotateCcw, Search, Send, Ticket, Trash2, Upload, Wrench } from "lucide-react"
+import { Crown, DatabaseBackup, Download, Megaphone, RotateCcw, Search, Send, Ticket, Trash2, Upload, Wrench } from "lucide-react"
 
-import { CASES } from "@/data/cases"
 import { toast } from "sonner"
 import { BRAINROTS } from "@/data/brainrots"
 import { originalPrice, useLive } from "@/lib/live"
-import { ownerExportBackup, ownerImportBackup, ownerSendBackupToTelegram, getMaintenance, ownerAnnounce, ownerCreatePromo, ownerDeletePromo, ownerGrant, ownerListPromos, ownerSetMaintenance, ownerSetPrice } from "@/lib/owner.functions"
+import { ownerExportBackup, ownerImportBackup, ownerSendBackupToTelegram, getMaintenance, ownerAnnounce, ownerCreatePromo, ownerDeletePromo, ownerListPromos, ownerSetMaintenance, ownerSetPrice } from "@/lib/owner.functions"
 import { useStore } from "@/lib/store"
 import { tg } from "@/lib/telegram"
 import { BrainrotImg, formatCoins } from "./ui"
+import { CaseEditorPanel, GrantPanel, RequestsPanel } from "./OwnerPanels"
 
 export function OwnerView() {
   const store = useStore()
@@ -100,8 +100,10 @@ export function OwnerView() {
         </div>
       </div>
 
-      <BackupPanel />
+      <RequestsPanel />
       <GrantPanel />
+      <CaseEditorPanel />
+      <BackupPanel />
       <MaintenancePanel />
       <PromoPanel />
 
@@ -157,65 +159,6 @@ function useInitData() {
     }
     return app.initData
   }
-}
-
-function GrantPanel() {
-  const initData = useInitData()
-  const [target, setTarget] = useState("")
-  const [kind, setKind] = useState<"coins" | "case">("coins")
-  const [amount, setAmount] = useState("")
-  const [caseId, setCaseId] = useState(CASES[0]?.id ?? "")
-  const [busy, setBusy] = useState(false)
-  const n = Number(amount)
-  const submit = async () => {
-    const d = initData()
-    if (!d) return
-    setBusy(true)
-    try {
-      const r = await ownerGrant({ data: { initData: d, target, kind, amount: n, caseId: kind === "case" ? caseId : null } })
-      toast.success(`Выдано ${r.who}`)
-      setAmount("")
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Ошибка")
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="bd-panel space-y-3 p-4">
-      <div className="flex items-center gap-2 font-bold">
-        <Gift className="size-4 text-[var(--bd-pink)]" /> Выдать игроку
-      </div>
-      <input className="bd-input" placeholder="@username или Telegram ID" value={target} onChange={(e) => setTarget(e.target.value.trim())} />
-      <div className="grid grid-cols-2 gap-1 rounded-xl bg-black/30 p-1">
-        {(["coins", "case"] as const).map((k) => (
-          <button key={k} type="button" onClick={() => setKind(k)} className={`rounded-lg py-2 text-xs font-bold ${kind === k ? "bg-white/12 text-white" : "text-white/50"}`}>
-            {k === "coins" ? "Монеты" : "Кейс"}
-          </button>
-        ))}
-      </div>
-      {kind === "case" && (
-        <select className="bd-input" value={caseId} onChange={(e) => setCaseId(e.target.value)}>
-          {CASES.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      )}
-      <input
-        className="bd-input"
-        inputMode="numeric"
-        placeholder={kind === "coins" ? "Сколько монет" : "Сколько кейсов"}
-        value={amount}
-        onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-      />
-      <button type="button" className="bd-btn w-full py-2.5 text-sm" disabled={busy || !target || !(n >= 1)} onClick={submit}>
-        Выдать {n >= 1 ? (kind === "coins" ? `${formatCoins(n)} монет` : `${n} кейс(ов)`) : ""}
-      </button>
-      <div className="text-[11px] text-white/40">Игрок получит выдачу в течение ~15 секунд, если он в приложении, или при следующем заходе.</div>
-    </div>
-  )
 }
 
 function MaintenancePanel() {
@@ -336,7 +279,7 @@ type Backup = {
   players: { tg_id: number; first_name?: string | null; username?: string | null; state: Record<string, unknown>; created_at?: string }[]
   promoCodes?: { code: string; coins: number; max_uses: number; uses: number; active: boolean }[]
   promoRedemptions?: { code: string; tg_id: number }[]
-  pendingGrants?: { tg_id: number; kind: "coins" | "case"; amount: number; case_id: string | null; note?: string | null }[]
+  pendingGrants?: { tg_id: number; kind: "coins" | "case" | "brainrot"; amount: number; case_id: string | null; brainrot_id?: string | null; note?: string | null }[]
   priceOverrides?: Record<string, number>
 }
 

@@ -186,7 +186,7 @@ async function buildBackup() {
     const [{ data: promos }, { data: redemptions }, { data: grants }, { data: settings }] = await Promise.all([
       supabaseAdmin.from("promo_codes").select("*"),
       supabaseAdmin.from("promo_redemptions").select("*"),
-      supabaseAdmin.from("pending_grants").select("tg_id, kind, amount, case_id, note, created_at").is("claimed_at", null),
+      supabaseAdmin.from("pending_grants").select("tg_id, kind, amount, case_id, brainrot_id, note, created_at").is("claimed_at", null),
       supabaseAdmin.from("app_settings").select("price_overrides").eq("id", 1).maybeSingle(),
     ])
     return JSON.stringify({
@@ -244,7 +244,7 @@ const importSchema = z.object({
     .optional(),
   promoRedemptions: z.array(z.object({ code: z.string().max(32), tg_id: z.number().int() })).max(20000).optional(),
   pendingGrants: z
-    .array(z.object({ tg_id: z.number().int(), kind: z.enum(["coins", "case"]), amount: z.number(), case_id: z.string().max(80).nullable(), note: z.string().max(500).nullable().optional() }))
+    .array(z.object({ tg_id: z.number().int(), kind: z.enum(["coins", "case", "brainrot"]), amount: z.number(), case_id: z.string().max(80).nullable(), brainrot_id: z.string().max(80).nullable().optional(), note: z.string().max(500).nullable().optional() }))
     .max(5000)
     .optional(),
   priceOverrides: z.record(z.string(), z.number()).optional(),
@@ -279,7 +279,7 @@ export const ownerImportBackup = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message)
     }
     if (data.pendingGrants?.length) {
-      const { error } = await supabaseAdmin.from("pending_grants").insert(data.pendingGrants.map((g) => ({ ...g, note: g.note ?? null })))
+      const { error } = await supabaseAdmin.from("pending_grants").insert(data.pendingGrants.map((g) => ({ ...g, brainrot_id: g.brainrot_id ?? null, note: g.note ?? null })))
       if (error) throw new Error(error.message)
     }
     if (data.priceOverrides && Object.keys(data.priceOverrides).length) {
