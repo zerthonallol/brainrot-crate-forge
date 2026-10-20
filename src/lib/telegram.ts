@@ -43,12 +43,15 @@ export function initTelegram() {
   return app.initDataUnsafe.user ?? null
 }
 
+// Light haptic = a plain tap (silent). Medium/heavy = a game round starts (whoosh).
 export function haptic(kind: "light" | "medium" | "heavy" = "light") {
   tg()?.HapticFeedback?.impactOccurred(kind)
+  if (kind !== "light") play("start")
 }
 
 export function notify(kind: "error" | "success" | "warning") {
   tg()?.HapticFeedback?.notificationOccurred(kind)
+  play(kind === "success" ? "win" : kind === "error" ? "lose" : "alert")
 }
 
 export function openShare(url: string, text: string) {
