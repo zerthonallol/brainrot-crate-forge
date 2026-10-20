@@ -7,10 +7,11 @@ import {
   type DemoUser,
 } from "@/data/fixtures"
 import { initTelegram, tg } from "./telegram"
-import { claimGrants, loadPlayer, reportDrop, savePlayer } from "./player.functions"
+import { claimGrants, loadPlayer, myRequests, reportDrop, savePlayer, submitRequest } from "./player.functions"
 import { toast } from "sonner"
 import { getSettings } from "./owner.functions"
-import { applyPriceOverrides, initStreamer, useLive } from "./live"
+import { applyCaseConfig, applyPriceOverrides, initStreamer, useLive } from "./live"
+import { play } from "./sound"
 import { rollMutation, mutatedValue, type MutationId } from "@/data/mutations"
 import { EMPTY_BP, PREMIUM_PRICE, TRACKS, canClaim, normalizeBp, type BpReward, type BpState, type StatKey, type Stats, type TrackId } from "@/data/battlepass"
 
@@ -56,6 +57,8 @@ export interface TransferRequest {
   brainrotId: string
   robloxNick: string
   creditAs?: "coins" | "brainrot"
+  itemUid?: string
+  adminReply?: string | null
   status: "pending" | "approved" | "rejected"
   createdAt: number
 }
@@ -114,6 +117,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const s = await getSettings()
       applyPriceOverrides(s.priceOverrides)
+      applyCaseConfig(s.caseOverrides ?? {})
       setAnnouncement(s.announcement && s.announcementId ? { id: s.announcementId, text: s.announcement, by: s.announcementBy } : null)
     } catch (e) {
       console.error("getSettings failed", e)
@@ -223,6 +227,66 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [loaded, persist])
 
+  // Deposit/withdraw requests live on the server; pull admin decisions and apply them once.
+  const requestsRef = useRef(requests)
+  requestsRef.current = requests
+  const syncRequests = useCallback(async (initData: string) => {
+    const remote = await myRequests({ data: { initData } })
+    const byId = new Map(remote.map((r) => [r.clientId, r]))
+    const local = requestsRef.current
+    // Re-send pending requests the server never received (e.g. sent while offline).
+    for (const r of local) {
+      if (r.status === "pending" && !byId.has(r.id)) {
+        submitRequest({
+          data: { initData, clientId: r.id, type: r.type, brainrotId: r.brainrotId, brainrotName: BRAINROT_BY_ID[r.brainrotId]?.name ?? r.brainrotId, robloxNick: r.robloxNick, creditAs: r.creditAs ?? null },
+        }).catch(() => {})
+      }
+    }
+    let changed = false
+    const next = local.map((r) => {
+      const s = byId.get(r.id)
+      if (!s) return r
+      const reply = s.reply ?? null
+      if (reply && reply !== (r.adminReply ?? null)) {
+        changed = true
+        toast.message("Ответ администратора", { description: reply })
+        play("alert")
+      }
+      if (r.status !== "pending" || s.status === "pending") return reply !== (r.adminReply ?? null) ? { ...r, adminReply: reply } : r
+      changed = true
+      const name = BRAINROT_BY_ID[r.brainrotId]?.name ?? "брейнрот"
+      if (s.status === "approved") {
+        play("win")
+        if (r.type === "deposit") {
+          if (r.creditAs === "coins") setBalance((b) => b + (BRAINROT_BY_ID[r.brainrotId]?.price ?? 0))
+          else if (BRAINROT_BY_ID[r.brainrotId]) setInventory((inv) => [{ uid: uid(), brainrotId: r.brainrotId, obtainedAt: Date.now(), status: "owned" }, ...inv])
+          toast.success(`Депозит ${name} одобрен`)
+        } else {
+          setInventory((inv) => {
+            const idx = inv.findIndex((i) => (r.itemUid ? i.uid === r.itemUid : i.brainrotId === r.brainrotId && i.status === "withdrawing"))
+            return idx < 0 ? inv : inv.filter((_, k) => k !== idx)
+          })
+          toast.success(`Вывод ${name} одобрен`)
+        }
+      } else {
+        play("lose")
+        if (r.type === "withdraw") {
+          setInventory((inv) => {
+            const idx = inv.findIndex((i) => (r.itemUid ? i.uid === r.itemUid : i.brainrotId === r.brainrotId && i.status === "withdrawing"))
+            return idx < 0 ? inv : inv.map((i, k) => (k === idx ? { ...i, status: "owned" } : i))
+          })
+        }
+        toast.error(`Заявка на ${r.type === "deposit" ? "депозит" : "вывод"} ${name} отклонена`)
+      }
+      return { ...r, status: s.status, adminReply: reply }
+    })
+    if (changed) {
+      requestsRef.current = next
+      setRequests(next)
+      setTimeout(() => persistRef.current(), 300)
+    }
+  }, [])
+
   // Developer gifts (coins / cases) are queued server-side and claimed here.
   useEffect(() => {
     if (!loaded) return
@@ -236,13 +300,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (g.kind === "coins") {
             setBalance((b) => b + g.amount)
             toast.success(`Разработчик выдал тебе ${g.amount.toLocaleString("ru-RU")} монет`)
+          } else if (g.kind === "brainrot" && g.brainrotId && BRAINROT_BY_ID[g.brainrotId]) {
+            const bid = g.brainrotId
+            const items: InvItem[] = Array.from({ length: Math.min(100, g.amount) }, () => ({ uid: uid(), brainrotId: bid, obtainedAt: Date.now(), status: "owned" }))
+            setInventory((inv) => [...items, ...inv])
+            toast.success(`Разработчик выдал тебе ${BRAINROT_BY_ID[bid].name}${g.amount > 1 ? ` ×${g.amount}` : ""}`)
           } else if (g.caseId) {
             const id = g.caseId
             setFreeCases((fc) => ({ ...fc, [id]: (fc[id] ?? 0) + g.amount }))
             toast.success(`Разработчик выдал тебе кейс ×${g.amount}`)
           }
         }
-        if (grants.length) setTimeout(() => persistRef.current(), 300)
+        if (grants.length) {
+          play("coin")
+          setTimeout(() => persistRef.current(), 300)
+        }
+        await syncRequests(app.initData)
       } catch (e) {
         console.error("claimGrants failed", e)
       }
@@ -253,7 +326,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       stop = true
       clearInterval(t)
     }
-  }, [loaded])
+  }, [loaded, syncRequests])
 
   const freeCasesRef = useRef(freeCases)
   freeCasesRef.current = freeCases
@@ -331,24 +404,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCooldowns((cd) => ({ ...cd, [c.id]: Date.now() }))
   }, [])
 
-  const requestDeposit = useCallback((brainrotId: string, robloxNick: string, creditAs: "coins" | "brainrot") => {
-    setRequests((r) => [
-      { id: uid(), type: "deposit", brainrotId, robloxNick, creditAs, status: "pending", createdAt: Date.now() },
-      ...r,
-    ])
+  const sendRequest = useCallback((r: TransferRequest) => {
+    const app = tg()
+    if (!app) return
+    submitRequest({
+      data: { initData: app.initData, clientId: r.id, type: r.type, brainrotId: r.brainrotId, brainrotName: BRAINROT_BY_ID[r.brainrotId]?.name ?? r.brainrotId, robloxNick: r.robloxNick, creditAs: r.creditAs ?? null },
+    }).catch((e) => console.error("submitRequest failed", e))
+    setTimeout(() => persistRef.current(), 300)
   }, [])
+
+  const requestDeposit = useCallback((brainrotId: string, robloxNick: string, creditAs: "coins" | "brainrot") => {
+    const req: TransferRequest = { id: uid(), type: "deposit", brainrotId, robloxNick, creditAs, status: "pending", createdAt: Date.now() }
+    setRequests((r) => [req, ...r])
+    sendRequest(req)
+  }, [sendRequest])
 
   const requestWithdraw = useCallback(
     (itemUid: string, robloxNick: string) => {
       const it = inventory.find((i) => i.uid === itemUid && i.status === "owned")
       if (!it || it.mutation) return
       setInventory((inv) => inv.map((i) => (i.uid === itemUid ? { ...i, status: "withdrawing" } : i)))
-      setRequests((r) => [
-        { id: uid(), type: "withdraw", brainrotId: it.brainrotId, robloxNick, status: "pending", createdAt: Date.now() },
-        ...r,
-      ])
+      const req: TransferRequest = { id: uid(), type: "withdraw", brainrotId: it.brainrotId, robloxNick, itemUid, status: "pending", createdAt: Date.now() }
+      setRequests((r) => [req, ...r])
+      sendRequest(req)
     },
-    [inventory],
+    [inventory, sendRequest],
   )
 
   const tradeItem = useCallback((itemUid: string, brainrotId: string) => {
