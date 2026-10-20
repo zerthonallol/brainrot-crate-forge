@@ -2,6 +2,7 @@
 // streamer mode (hide coin values) and owner price overrides.
 import { useSyncExternalStore } from "react"
 import { BRAINROTS } from "@/data/brainrots"
+import { applyCaseOverrides, type CaseOverride } from "@/data/cases"
 
 const ORIGINAL: Record<string, number> = Object.fromEntries(BRAINROTS.map((b) => [b.id, b.price]))
 const LS_STREAMER = "brainrotdrop:streamer"
@@ -51,6 +52,14 @@ export function applyPriceOverrides(map: Record<string, number>) {
     }
   }
   if (changed) {
+    state = { ...state, priceVersion: state.priceVersion + 1 }
+    emit()
+  }
+}
+
+/** Owner case overrides (chances, added/removed brainrots) apply to everyone. */
+export function applyCaseConfig(map: Record<string, CaseOverride>) {
+  if (applyCaseOverrides(map)) {
     state = { ...state, priceVersion: state.priceVersion + 1 }
     emit()
   }
