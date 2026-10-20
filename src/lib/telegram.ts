@@ -1,3 +1,4 @@
+import { play } from "./sound"
 // Thin wrapper over the Telegram WebApp SDK (telegram-web-app.js loaded in __root).
 interface TgUser {
   id: number
