@@ -8,6 +8,7 @@ import { useStore } from "@/lib/store"
 import { haptic, notify, openShare } from "@/lib/telegram"
 import { cn } from "@/lib/utils"
 import { useLive } from "@/lib/live"
+import { play } from "@/lib/sound"
 import { MUTATION_BY_ID, mutatedValue, type MutationId } from "@/data/mutations"
 import { BRAINROT_BY_ID, TIER_META, type Tier } from "@/data/brainrots"
 import { CoinAmount, BrainrotCard, DropCard, cdnImage, dropLabel, dropValue, Coin, formatCoins } from "./ui"
@@ -132,13 +133,7 @@ function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
       <span className="bd-halftone" />
       <span className="bd-case-shine" />
       <div className="relative z-[2] flex w-full items-start justify-between gap-1">
-        {small ? (
-          <span className="bd-case-chip">{KIND_BADGE[c.kind] ?? "BONUS"}</span>
-        ) : (
-          <span className="bd-case-chip">
-            ДО <Coin size={10} /> {streamer ? "•••" : shortCoins(meta.top)}
-          </span>
-        )}
+        {small ? <span className="bd-case-chip">{KIND_BADGE[c.kind] ?? "BONUS"}</span> : <span />}
         {gifted > 0 && <span className="bd-case-gift">🎁×{gifted}</span>}
       </div>
       <div className={cn("relative mt-1 grid w-full place-items-center", small ? "h-[72px]" : "h-32")}>
@@ -176,7 +171,6 @@ function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
               <span key={sg.key} style={{ flexGrow: sg.n, background: sg.color }} />
             ))}
           </div>
-          <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-white/45">{meta.rots} брейнротов внутри</div>
         </div>
       )}
       <div className="relative z-[2] mt-2 w-full">
@@ -255,6 +249,7 @@ function CaseModal({ c, onClose }: { c: CaseDef; onClose: () => void }) {
     const target = 4 + WIN_INDEX * CELL - width / 2 + (CELL - 8) / 2 + jitter
     // Two frames so the reset to 0 paints before the long transition starts.
     requestAnimationFrame(() => requestAnimationFrame(() => setOffset(target)))
+    startTicks(viewport.current, fast ? 1300 : 6000)
     window.setTimeout(
       () => {
         setSpinning(false)
@@ -263,6 +258,7 @@ function CaseModal({ c, onClose }: { c: CaseDef; onClose: () => void }) {
         const item = store.grant(result, { mutate: true, source: "Кейс" })
         setWonUid(item?.uid ?? null)
         setWonMut(item?.mutation)
+        if (dropValue(result) >= c.price * 3) play("bigwin")
         if (item?.mutation) toast.success(`Мутация ${MUTATION_BY_ID[item.mutation].name}! ×${MUTATION_BY_ID[item.mutation].mult}`)
       },
       fast ? 1300 : 6000,
@@ -458,6 +454,24 @@ export function InviteButton({ userId }: { userId: number }) {
       <Share2 className="size-4" /> Пригласить друга
     </button>
   )
+}
+
+/** Clicks each time a card passes the center line while the strip decelerates. */
+function startTicks(vp: HTMLDivElement | null, ms: number) {
+  const strip = vp?.firstElementChild?.nextElementSibling?.nextElementSibling?.nextElementSibling as HTMLElement | null
+  if (!strip) return
+  const end = performance.now() + ms
+  let last = -1
+  const loop = () => {
+    const m = new DOMMatrixReadOnly(getComputedStyle(strip).transform)
+    const idx = Math.floor(-m.m41 / CELL)
+    if (idx !== last) {
+      if (last >= 0) play("tick")
+      last = idx
+    }
+    if (performance.now() < end) requestAnimationFrame(loop)
+  }
+  requestAnimationFrame(loop)
 }
 
 function buildStrip(c: CaseDef): Drop[] {
