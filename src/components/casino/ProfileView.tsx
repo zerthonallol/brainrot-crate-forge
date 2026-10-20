@@ -386,6 +386,7 @@ function Requests() {
                 {r.type === "deposit" ? "Депозит" : "Вывод"} · {r.robloxNick}
               </div>
               <div className="truncate text-sm font-bold">{b.name}</div>
+              {r.adminReply && <div className="mt-1 rounded-lg bg-black/30 px-2 py-1 text-[11px] text-white/75">💬 {r.adminReply}</div>}
             </div>
             <StatusBadge status={r.status} />
           </div>
