@@ -19,3 +19,7 @@
 - Navigation is a top-left corner menu (src/routes/index.tsx), not a bottom bar; every tab must be added to TABS so it appears there.
 - Backups are versioned JSON (`app: "brainrotdrop"`) of players, promo codes, unclaimed grants and price overrides; imports are chunked and bump `state.savedAt` so the restored copy wins over device caches.
 - tsconfig keeps noUncheckedIndexedAccess/exactOptionalPropertyTypes off to match the original BrainrotDrop codebase.
+
+- Case chances/contents: static defaults live in `src/data/cases.ts`; owner edits are stored as `app_settings.case_overrides` and applied in place via `buildEntries`/`applyCaseOverrides`. Why: every client sees the same odds without redeploying.
+- Deposit/withdraw requests are stored server-side in `transfer_requests` (keyed by player tg_id + client id); clients poll and apply admin decisions once. Why: the owner must review them and the bot notifies both sides.
+- Sounds are synthesized in `src/lib/sound.ts` and fired from `notify()`/medium `haptic()`; light taps stay silent. Why: owner asked for event sounds but no click sounds.
