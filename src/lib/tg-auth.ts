@@ -32,3 +32,22 @@ export async function authTelegram(initData: string) {
 export function isOwner(id: number | undefined | null) {
   return id === OWNER_TG_ID
 }
+
+/** Sends a bot message to a Telegram chat. Never throws — returns false when it fails. */
+export async function sendBotMessage(chatId: number, text: string, extra: Record<string, unknown> = {}) {
+  const token = process.env["TELEGRAM_BOT_TOKEN"]
+  if (!token) return false
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true, ...extra }),
+    })
+    const body = (await res.json().catch(() => null)) as { ok?: boolean } | null
+    return Boolean(body?.ok)
+  } catch {
+    return false
+  }
+}
+
+export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")

@@ -1,9 +1,11 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
-import { authTelegram, isOwner } from "./tg-auth"
+import { authTelegram, escapeHtml, isOwner, sendBotMessage } from "./tg-auth"
+import type { CaseOverride } from "@/data/cases"
 
 export interface PublicSettings {
   priceOverrides: Record<string, number>
+  caseOverrides: Record<string, CaseOverride>
   announcement: string | null
   announcementId: string | null
   announcementBy: number | null
@@ -14,6 +16,7 @@ export const getSettings = createServerFn({ method: "GET" }).handler(async (): P
   const { data } = await supabaseAdmin.from("app_settings").select("*").eq("id", 1).maybeSingle()
   return {
     priceOverrides: (data?.price_overrides as Record<string, number> | null) ?? {},
+    caseOverrides: (data?.case_overrides as Record<string, CaseOverride> | null) ?? {},
     announcement: data?.announcement ?? null,
     announcementId: data?.announcement_id ?? null,
     announcementBy: data?.announcement_by ?? null,
@@ -96,9 +99,10 @@ export const ownerGrant = createServerFn({ method: "POST" })
       .object({
         initData: z.string().max(4096),
         target: z.string().min(1).max(64),
-        kind: z.enum(["coins", "case"]),
+        kind: z.enum(["coins", "case", "brainrot"]),
         amount: z.number().int().min(1).max(1_000_000_000_000),
         caseId: z.string().max(80).nullable(),
+        brainrotId: z.string().max(80).nullable().optional(),
       })
       .parse(d),
   )
@@ -107,12 +111,15 @@ export const ownerGrant = createServerFn({ method: "POST" })
     const p = await findPlayer(data.target)
     if (!p) throw new Error("Игрок не найден — он должен хоть раз зайти в приложение")
     if (data.kind === "case" && !data.caseId) throw new Error("Выбери кейс")
+    if (data.kind === "brainrot" && !data.brainrotId) throw new Error("Выбери брейнрота")
+    if (data.kind === "brainrot" && data.amount > 100) throw new Error("Не больше 100 штук за раз")
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
     const { error } = await supabaseAdmin.from("pending_grants").insert({
       tg_id: p.tg_id,
       kind: data.kind,
       amount: data.amount,
       case_id: data.kind === "case" ? data.caseId : null,
+      brainrot_id: data.kind === "brainrot" ? (data.brainrotId ?? null) : null,
     })
     if (error) throw new Error(error.message)
     return { ok: true, who: p.username ? `@${p.username}` : `ID ${p.tg_id}` }
@@ -280,4 +287,100 @@ export const ownerImportBackup = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message)
     }
     return { ok: true, players: data.players.length }
+  })
+
+// ---- Case editor: chances and brainrots inside each case ----
+
+const overrideSchema = z.object({
+  chances: z.record(z.string().max(100), z.number().min(0).max(100)).optional(),
+  add: z.array(z.string().max(80)).max(200).optional(),
+  remove: z.array(z.string().max(80)).max(200).optional(),
+})
+
+export const ownerSetCaseOverride = createServerFn({ method: "POST" })
+  .inputValidator((d) => z.object({ initData: z.string().max(4096), caseId: z.string().max(80), override: overrideSchema.nullable() }).parse(d))
+  .handler(async ({ data }) => {
+    await requireOwner(data.initData)
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
+    const { data: row } = await supabaseAdmin.from("app_settings").select("case_overrides").eq("id", 1).maybeSingle()
+    const map = { ...((row?.case_overrides as Record<string, CaseOverride> | null) ?? {}) }
+    const o = data.override
+    const empty = !o || (!Object.keys(o.chances ?? {}).length && !(o.add ?? []).length && !(o.remove ?? []).length)
+    if (empty) delete map[data.caseId]
+    else map[data.caseId] = o
+    const { error } = await supabaseAdmin.from("app_settings").update({ case_overrides: map as never, updated_at: new Date().toISOString() }).eq("id", 1)
+    if (error) throw new Error(error.message)
+    return { ok: true, caseOverrides: map }
+  })
+
+// ---- Deposit / withdraw requests ----
+
+export interface AdminRequest {
+  id: string
+  tgId: number
+  userName: string
+  type: "deposit" | "withdraw"
+  brainrotId: string
+  robloxNick: string
+  creditAs: string | null
+  status: "pending" | "approved" | "rejected"
+  adminReply: string | null
+  createdAt: string
+}
+
+export const ownerListRequests = createServerFn({ method: "POST" })
+  .inputValidator((d) => z.object({ initData: z.string().max(4096), status: z.enum(["pending", "done"]) }).parse(d))
+  .handler(async ({ data }): Promise<AdminRequest[]> => {
+    await requireOwner(data.initData)
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
+    let q = supabaseAdmin.from("transfer_requests").select("*").order("created_at", { ascending: data.status === "pending" }).limit(100)
+    q = data.status === "pending" ? q.eq("status", "pending") : q.neq("status", "pending")
+    const { data: rows, error } = await q
+    if (error) throw new Error(error.message)
+    return (rows ?? []).map((r) => ({
+      id: r.id,
+      tgId: Number(r.tg_id),
+      userName: r.user_name,
+      type: r.type as "deposit" | "withdraw",
+      brainrotId: r.brainrot_id,
+      robloxNick: r.roblox_nick,
+      creditAs: r.credit_as,
+      status: r.status as AdminRequest["status"],
+      adminReply: r.admin_reply,
+      createdAt: r.created_at,
+    }))
+  })
+
+export const ownerResolveRequest = createServerFn({ method: "POST" })
+  .inputValidator((d) =>
+    z
+      .object({
+        initData: z.string().max(4096),
+        id: z.string().uuid(),
+        status: z.enum(["approved", "rejected"]).nullable(),
+        reply: z.string().max(1000).nullable(),
+        brainrotName: z.string().max(120).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireOwner(data.initData)
+    const reply = data.reply?.trim() || null
+    if (!data.status && !reply) throw new Error("Напиши ответ или выбери решение")
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
+    const { data: req } = await supabaseAdmin.from("transfer_requests").select("*").eq("id", data.id).maybeSingle()
+    if (!req) throw new Error("Заявка не найдена")
+    if (data.status && req.status !== "pending") throw new Error("Заявка уже обработана")
+    const patch: { admin_reply?: string | null; status?: string; resolved_at?: string } = {}
+    if (reply) patch.admin_reply = reply
+    if (data.status) {
+      patch.status = data.status
+      patch.resolved_at = new Date().toISOString()
+    }
+    const { error } = await supabaseAdmin.from("transfer_requests").update(patch).eq("id", data.id)
+    if (error) throw new Error(error.message)
+    const what = `${req.type === "deposit" ? "депозит" : "вывод"} «${escapeHtml(data.brainrotName ?? req.brainrot_id)}»`
+    const head = data.status === "approved" ? `✅ Заявка на ${what} одобрена` : data.status === "rejected" ? `❌ Заявка на ${what} отклонена` : `💬 Ответ по заявке на ${what}`
+    await sendBotMessage(Number(req.tg_id), reply ? `${head}\n\n<b>Админ:</b> ${escapeHtml(reply)}` : head)
+    return { ok: true }
   })
